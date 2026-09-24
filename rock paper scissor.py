@@ -411,8 +411,26 @@ pause_resume_btn.bind("<Leave>", on_pr_leave)
 # ═══════════════════════════════════════════════════════════
 # ROUNDS FRAME
 # ═══════════════════════════════════════════════════════════
-plus_img_r  = load_img("plus.jpg",  (80, 80))
-moins_img_r = load_img("moins.jpg", (80, 80))
+plus_img_r       = load_img("plus.jpg",   (80, 80))
+moins_img_r      = load_img("moins.jpg",  (80, 80))
+rounds_title_img = load_img("rounds.png", (400, 100))
+
+number_imgs_small = {
+    "one":   load_img("one.gif",   (80, 80)),
+    "two":   load_img("two.gif",   (80, 80)),
+    "three": load_img("three.gif", (80, 80)),
+    "four":  load_img("four.gif",  (80, 80)),
+    "five":  load_img("five.gif",  (80, 80)),
+    "six":   load_img("six.gif",   (80, 80)),
+    "seven": load_img("seven.gif", (80, 80)),
+    "eight": load_img("eight.gif", (80, 80)),
+    "nine":  load_img("nine.gif",  (80, 80)),
+}
+
+digit_map = {
+    1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+    6: "six", 7: "seven", 8: "eight", 9: "nine"
+}
 
 rounds_frame = tk.Frame(root, width=800, height=600, bg=BG_COLOR)
 rounds_frame.place(x=0, y=0, width=800, height=600)
@@ -430,22 +448,26 @@ exit_btn3.image = exit_img
 exit_btn3.place(x=745, y=5)
 exit_btn3.bind("<Button-1>", lambda e: root.destroy())
 
-# ── ROUNDS title in pixel font ──
-tk.Label(rounds_frame, text="ROUNDS", bg=BG_COLOR, fg="#1a6ebd",
-         font=("Courier", 52, "bold")).place(x=190, y=100)
+# ── ROUNDS title centered ──
+rounds_title = tk.Label(rounds_frame, image=rounds_title_img, bg=BG_COLOR)
+rounds_title.image = rounds_title_img
+rounds_title.place(x=200, y=80)
 
-# ── minus, number, plus centered ──
+# ── row: minus | number(s) | plus all centered at y=260 ──
+# minus at x=160, plus at x=560, number zone center=400
 moins_btn = tk.Label(rounds_frame, image=moins_img_r, bg=BG_COLOR, cursor="hand2")
 moins_btn.image = moins_img_r
-moins_btn.place(x=200, y=270)
+moins_btn.place(x=160, y=260)
 
-rounds_display = tk.Label(rounds_frame, text="1", bg=BG_COLOR, fg="white",
-                           font=("Courier", 72, "bold"), width=3, anchor="center")
-rounds_display.place(x=320, y=240)
+# two digit labels, will be positioned dynamically
+rounds_display_left  = tk.Label(rounds_frame, bg=BG_COLOR)
+rounds_display_right = tk.Label(rounds_frame, bg=BG_COLOR)
+rounds_display_left.place(x=0, y=260)   # positioned in update_display
+rounds_display_right.place(x=0, y=260)  # positioned in update_display
 
 plus_btn_r = tk.Label(rounds_frame, image=plus_img_r, bg=BG_COLOR, cursor="hand2")
 plus_btn_r.image = plus_img_r
-plus_btn_r.place(x=520, y=270)
+plus_btn_r.place(x=560, y=260)
 
 # ── next button centered ──
 next_btn2 = tk.Label(rounds_frame, image=next_img, bg=BG_COLOR)
@@ -453,12 +475,44 @@ next_btn2.image = next_img
 next_btn2.place(x=310, y=430)
 
 # ── logic ──
+CENTER_X = 400
+BASE_Y   = 260
+
 def update_display(direction):
-    rounds_display.config(text=str(rounds_val[0]))
-    orig_y = 240
+    val = rounds_val[0]
+
+    if val < 10:
+        # single digit — center one image at 400
+        rounds_display_left.config(image='')
+        rounds_display_left.image = None
+        img = number_imgs_small[digit_map[val]]
+        rounds_display_right.config(image=img)
+        rounds_display_right.image = img
+        # center single: x = CENTER_X - 40 (half of 80)
+        rounds_display_right.place_configure(x=CENTER_X - 40)
+        rounds_display_left.place_configure(x=-100)  # hide off screen
+    else:
+        tens  = val // 10
+        units = val % 10
+        img_l = number_imgs_small[digit_map[tens]]
+        img_r = number_imgs_small[digit_map[units]] if units in digit_map else number_imgs_small["one"]
+        rounds_display_left.config(image=img_l)
+        rounds_display_left.image = img_l
+        rounds_display_right.config(image=img_r)
+        rounds_display_right.image = img_r
+        # center two: total width = 160+8gap, start = CENTER_X - 84
+        rounds_display_left.place_configure(x=CENTER_X - 84)
+        rounds_display_right.place_configure(x=CENTER_X + 4)
+
     shift = -15 if direction == "up" else 15
-    rounds_display.place_configure(y=orig_y + shift)
-    rounds_frame.after(80, lambda: rounds_display.place_configure(y=orig_y))
+    rounds_display_left.place_configure(y=BASE_Y + shift)
+    rounds_display_right.place_configure(y=BASE_Y + shift)
+    rounds_frame.after(80, lambda: [
+        rounds_display_left.place_configure(y=BASE_Y),
+        rounds_display_right.place_configure(y=BASE_Y)
+    ])
+
+update_display("up")
 
 def add_round():
     if rounds_val[0] < 21:
@@ -484,23 +538,23 @@ def on_moins_enter(e):
     global moins_hovering
     if not moins_hovering:
         moins_hovering = True
-        moins_btn.place_configure(y=260)
+        moins_btn.place_configure(y=250)
 
 def on_moins_leave(e):
     global moins_hovering
     moins_hovering = False
-    moins_btn.place_configure(y=270)
+    moins_btn.place_configure(y=260)
 
 def on_plus_r_enter(e):
     global plus_r_hovering
     if not plus_r_hovering:
         plus_r_hovering = True
-        plus_btn_r.place_configure(y=260)
+        plus_btn_r.place_configure(y=250)
 
 def on_plus_r_leave(e):
     global plus_r_hovering
     plus_r_hovering = False
-    plus_btn_r.place_configure(y=270)
+    plus_btn_r.place_configure(y=260)
 
 def on_next2_enter(e):
     global next2_hovering
@@ -547,7 +601,6 @@ exit_btn3.bind("<Enter>",   on_exit3_enter)
 exit_btn3.bind("<Leave>",   on_exit3_leave)
 
 next_btn.bind("<Button-1>", lambda e: show_frame(rounds_frame) if selected_mode else None)
-
 # ── Start ─────────────────────────────────────────────────
 show_frame(home_frame)
 root.mainloop()

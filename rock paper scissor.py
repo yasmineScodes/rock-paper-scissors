@@ -79,7 +79,18 @@ for frame in (home_frame, setup_frame, rounds_frame,
               game_frame, result_frame, pause_frame, menu_frame):
     frame.place(x=0, y=0, width=800, height=600)
 
+pending = []
+
+def schedule(ms, fn):
+    pending.append(root.after(ms, fn))
+
+def cancel_timers():
+    for t in pending:
+        root.after_cancel(t)
+    pending.clear()
+
 def show_frame(frame):
+    cancel_timers()
     frame.tkraise()
 
 # ═══════════════════════════════════════════════════════════
@@ -700,12 +711,38 @@ def get_winner(choice1, choice2):
 # ═══════════════════════════════════════════════════════════
 # CHARACTER FRAME
 # ═══════════════════════════════════════════════════════════
-char_title_img = load_img("characters.png", (400, 80))
-player_img     = load_img("player.jpg",     (120, 60))
-gumball_img    = load_img("gumball.png",    (90, 124))
-darwin_img     = load_img("darwin.png",     (90, 111))
-elsa_img       = load_img("elsa.png",       (90, 119))
-iceking_img    = load_img("iceking.gif",    (90, 100))
+BG_RGB = (214, 238, 255)
+
+def make_variants(path, h):
+    """Same-height versions: normal, hover, selected, disabled (faded)."""
+    base = Image.open(path).convert("RGBA")
+    def size(s):
+        return (round(base.width * h * s / base.height), round(h * s))
+    v = {}
+    for key, s in (("n", 1.0), ("h", 1.2), ("s", 1.3)):
+        v[key] = ImageTk.PhotoImage(base.resize(size(s), Image.Resampling.NEAREST))
+    bg   = Image.new("RGBA", base.size, BG_RGB + (255,))
+    comp = Image.alpha_composite(bg, base)
+    faded = Image.blend(bg, comp, 0.3)
+    v["d"] = ImageTk.PhotoImage(faded.resize(size(1.0), Image.Resampling.NEAREST))
+    return v
+
+CHAR_H = 150   # every character gets the same height
+
+char_title_img = load_img("characters.png", (600, 120))          # bigger title
+player_img     = load_img("player.png",     (180, 90))           # bigger "PLAYER"
+num_small      = {1: load_img("one.gif", (55, 55)),              # smaller number
+                  2: load_img("two.gif", (55, 55))}
+next_char_img  = load_img("next.gif",       (150, 96))
+
+chars_info = [
+    {"name": "gumball", "file": "gumball.png", "cx": 100},
+    {"name": "darwin",  "file": "darwin.png",  "cx": 300},
+    {"name": "elsa",    "file": "elsa.png",    "cx": 500},
+    {"name": "iceking", "file": "iceking.gif", "cx": 700},
+]
+for info in chars_info:
+    info["imgs"] = make_variants(info["file"], CHAR_H)
 
 char_frame = tk.Frame(root, width=800, height=600, bg=BG_COLOR)
 char_frame.place(x=0, y=0, width=800, height=600)
@@ -724,137 +761,142 @@ exit_btn4.bind("<Button-1>", lambda e: root.destroy())
 # ── title ──
 char_title = tk.Label(char_frame, image=char_title_img, bg=BG_COLOR)
 char_title.image = char_title_img
-char_title.place(x=200, y=60)
+char_title.place(x=100, y=40)
 
-# ── player label + number ──
+# ── bottom row:  PLAYER [1]  [name box]            [NEXT] ──
+ROW_CY = 520
+
 player_label = tk.Label(char_frame, image=player_img, bg=BG_COLOR)
 player_label.image = player_img
-player_label.place(x=480, y=490)
+player_label.place(x=30, y=ROW_CY, anchor="w")
 
-# player number image (1 or 2)
 player_num_display = tk.Label(char_frame, bg=BG_COLOR)
-player_num_display.place(x=620, y=480)
+player_num_display.place(x=222, y=ROW_CY, anchor="w")
 
-# ── name input ──
 name_var = tk.StringVar()
-name_entry = tk.Entry(char_frame, textvariable=name_var, font=("Courier", 14),
+name_entry = tk.Entry(char_frame, textvariable=name_var, font=("Courier", 18, "bold"),
                       bg="white", fg="#1a6ebd", relief="flat",
-                      highlightthickness=2, highlightcolor="#1a6ebd",
-                      highlightbackground="#a0c8f0", width=14)
-name_entry.place(x=60, y=500)
+                      highlightthickness=3, highlightcolor="#1a6ebd",
+                      highlightbackground="#a0c8f0", justify="center")
+name_entry.place(x=295, y=ROW_CY, anchor="w", width=270, height=48)
 
-# ── characters setup ──
-CHAR_BASE_Y   = 220
-CHAR_FLOAT_AMP   = 8
-CHAR_FLOAT_SPEED = 0.04
+char_next_btn = tk.Label(char_frame, image=next_char_img, bg=BG_COLOR, cursor="hand2")
+char_next_btn.image = next_char_img
+char_next_btn.place(x=620, y=ROW_CY, anchor="w")
+
+# ── characters ──
+CHAR_CY          = 300
+CHAR_FLOAT_AMP   = 10
+CHAR_FLOAT_SPEED = 0.15      # faster up/down
 CHAR_TICK_MS     = 30
 
-chars_info = [
-    {"name": "gumball",  "img": gumball_img,  "x": 80,  "base_w": 90,  "base_h": 124},
-    {"name": "darwin",   "img": darwin_img,   "x": 230, "base_w": 90,  "base_h": 111},
-    {"name": "elsa",     "img": elsa_img,     "x": 390, "base_w": 90,  "base_h": 119},
-    {"name": "iceking",  "img": iceking_img,  "x": 550, "base_w": 90,  "base_h": 100},
-]
+char_labels   = []
+char_hovering = [False] * 4
+selected_idx  = [None]        # character picked by the current player
+taken         = set()         # characters already used by player 1
+char_angles   = [i * 0.9 for i in range(4)]
 
-char_labels    = []
-char_angles    = []
-char_selected  = [False, False, False, False]
-char_hovering  = [False, False, False, False]
+current_player_turn = [0]     # 0 = player 1, 1 = player 2
+p1_char, p2_char = [None], [None]
+p1_name, p2_name = ["Player 1"], ["Player 2"]
 
-# current player being assigned (0 = p1, 1 = p2)
-current_player_turn = [0]
-p1_char = [None]
-p2_char = [None]
-
-def make_char_label(i, info):
-    lbl = tk.Label(char_frame, image=info["img"], bg=BG_COLOR, cursor="hand2")
-    lbl.image = info["img"]
-    lbl.place(x=info["x"], y=CHAR_BASE_Y)
-    return lbl
+def refresh_char(i):
+    imgs = chars_info[i]["imgs"]
+    if i in taken:
+        key = "d"
+    elif selected_idx[0] == i:
+        key = "s"
+    elif char_hovering[i]:
+        key = "h"
+    else:
+        key = "n"
+    char_labels[i].config(image=imgs[key], cursor="arrow" if i in taken else "hand2")
+    char_labels[i].image = imgs[key]
 
 for i, info in enumerate(chars_info):
-    lbl = make_char_label(i, info)
+    lbl = tk.Label(char_frame, image=info["imgs"]["n"], bg=BG_COLOR, cursor="hand2")
+    lbl.image = info["imgs"]["n"]
+    lbl.place(x=info["cx"], y=CHAR_CY, anchor="center")
     char_labels.append(lbl)
-    char_angles.append(i * 0.8)
 
 def select_char(i):
-    name = chars_info[i]["name"]
-    turn = current_player_turn[0]
-
-    # deselect previously selected for this player
-    for j in range(4):
-        if turn == 0 and p1_char[0] == chars_info[j]["name"]:
-            char_selected[j] = False
-        elif turn == 1 and p2_char[0] == chars_info[j]["name"]:
-            char_selected[j] = False
-
-    char_selected[i] = True
-    if turn == 0:
-        p1_char[0] = name
-    else:
-        p2_char[0] = name
-
-    # resize to big immediately
-    info = chars_info[i]
-    char_labels[i].place_configure(
-        width=int(info["base_w"] * 1.3),
-        height=int(info["base_h"] * 1.3),
-        y=CHAR_BASE_Y - 10
-    )
+    if i in taken:
+        return                      # already chosen by player 1
+    old = selected_idx[0]
+    selected_idx[0] = i
+    if old is not None:
+        refresh_char(old)
+    refresh_char(i)
 
 def on_char_enter(i):
-    def handler(e):
-        if not char_selected[i] and not char_hovering[i]:
-            char_hovering[i] = True
-            info = chars_info[i]
-            char_labels[i].place_configure(
-                width=int(info["base_w"] * 1.2),
-                height=int(info["base_h"] * 1.2)
-            )
-    return handler
+    def h(e):
+        char_hovering[i] = True
+        refresh_char(i)
+    return h
 
 def on_char_leave(i):
-    def handler(e):
+    def h(e):
         char_hovering[i] = False
-        if not char_selected[i]:
-            info = chars_info[i]
-            char_labels[i].place_configure(
-                width=info["base_w"],
-                height=info["base_h"]
-            )
-    return handler
+        refresh_char(i)
+    return h
 
 for i, lbl in enumerate(char_labels):
     lbl.bind("<Enter>",    on_char_enter(i))
     lbl.bind("<Leave>",    on_char_leave(i))
     lbl.bind("<Button-1>", lambda e, idx=i: select_char(idx))
 
-# ── floating animation ──
-char_anim_angles = [i * 0.8 for i in range(4)]
-
 def animate_chars():
     for i, lbl in enumerate(char_labels):
-        if not char_selected[i]:
-            char_anim_angles[i] += CHAR_FLOAT_SPEED
-            offset = int(CHAR_FLOAT_AMP * math.sin(char_anim_angles[i]))
-            info = chars_info[i]
-            lbl.place_configure(y=CHAR_BASE_Y + offset)
+        if selected_idx[0] == i or i in taken:
+            lbl.place_configure(y=CHAR_CY)
+        else:
+            char_angles[i] += CHAR_FLOAT_SPEED
+            lbl.place_configure(y=CHAR_CY + int(CHAR_FLOAT_AMP * math.sin(char_angles[i])))
     char_frame.after(CHAR_TICK_MS, animate_chars)
 
 animate_chars()
 
-# ── player number display ──
 def update_player_num():
-    turn = current_player_turn[0]
-    img = number_imgs_small["one"] if turn == 0 else number_imgs_small["two"]
+    img = num_small[current_player_turn[0] + 1]
     player_num_display.config(image=img)
     player_num_display.image = img
 
 update_player_num()
 
-# ── hover for top buttons ──
+# ── NEXT logic ──
+def char_next():
+    if selected_idx[0] is None:
+        return
+    name = name_var.get().strip()
+    turn = current_player_turn[0]
+
+    if turn == 0:
+        p1_char[0] = chars_info[selected_idx[0]]["name"]
+        p1_name[0] = name or "Player 1"
+        if selected_mode == "2p":
+            taken.add(selected_idx[0])
+            selected_idx[0] = None
+            current_player_turn[0] = 1
+            name_var.set("")
+            update_player_num()
+            for i in range(4):
+                refresh_char(i)
+        else:
+            free = [i for i in range(4) if i != selected_idx[0]]
+            p2_char[0] = chars_info[free[randint(0, len(free) - 1)]]["name"]
+            p2_name[0] = "Computer"
+            show_vs()
+    else:
+        p2_char[0] = chars_info[selected_idx[0]]["name"]
+        p2_name[0] = name or "Player 2"
+        show_vs()
+
+char_next_btn.bind("<Button-1>", lambda e: char_next())
+
+# ── hover effects ──
 pause3_hovering = False
 exit4_hovering  = False
+cnext_hovering  = False
 
 def on_pause3_enter(e):
     global pause3_hovering
@@ -878,31 +920,388 @@ def on_exit4_leave(e):
     exit4_hovering = False
     exit_btn4.place_configure(y=5)
 
-pause_btn3.bind("<Enter>", on_pause3_enter)
-pause_btn3.bind("<Leave>", on_pause3_leave)
-exit_btn4.bind("<Enter>",  on_exit4_enter)
-exit_btn4.bind("<Leave>",  on_exit4_leave)
+def on_cnext_enter(e):
+    global cnext_hovering
+    if not cnext_hovering:
+        cnext_hovering = True
+        char_next_btn.place_configure(y=ROW_CY - 10)
 
-# ── wire next_btn2 from rounds → char frame ──
-next_btn2.bind("<Button-1>", lambda e: go_to_char_frame())
+def on_cnext_leave(e):
+    global cnext_hovering
+    cnext_hovering = False
+    char_next_btn.place_configure(y=ROW_CY)
 
+pause_btn3.bind("<Enter>",    on_pause3_enter)
+pause_btn3.bind("<Leave>",    on_pause3_leave)
+exit_btn4.bind("<Enter>",     on_exit4_enter)
+exit_btn4.bind("<Leave>",     on_exit4_leave)
+char_next_btn.bind("<Enter>", on_cnext_enter)
+char_next_btn.bind("<Leave>", on_cnext_leave)
+
+# ── wire rounds → character screen ──
 def go_to_char_frame():
-    # reset selections
-    for i in range(4):
-        char_selected[i] = False
-        char_hovering[i] = False
-        info = chars_info[i]
-        char_labels[i].place_configure(
-            width=info["base_w"],
-            height=info["base_h"],
-            y=CHAR_BASE_Y
-        )
-    p1_char[0] = None
-    p2_char[0] = None
+    taken.clear()
+    selected_idx[0] = None
+    p1_char[0] = p2_char[0] = None
     current_player_turn[0] = 0
-    update_player_num()
     name_var.set("")
+    update_player_num()
+    for i in range(4):
+        char_hovering[i] = False
+        refresh_char(i)
     show_frame(char_frame)
+
+next_btn2.bind("<Button-1>", lambda e: go_to_char_frame())
+# ═══════════════════════════════════════════════════════════
+# VS FRAME
+# ═══════════════════════════════════════════════════════════
+from PIL import ImageDraw
+
+def load_img_transparent(path, size):
+    img = Image.open(path).convert("RGBA")
+    ImageDraw.floodfill(img, (0, 0), (255, 0, 255, 0), thresh=40)
+    return ImageTk.PhotoImage(img.resize(size, Image.Resampling.NEAREST))
+
+vs_pause_img = load_img_transparent("pause.jpg", (50, 50))
+
+vs_frame = tk.Frame(root, width=800, height=600, bg=BG_COLOR)
+vs_frame.place(x=0, y=0, width=800, height=600)
+
+vs_canvas = tk.Canvas(vs_frame, width=800, height=600,
+                      highlightthickness=0, bd=0, bg=BG_COLOR)
+vs_canvas.place(x=0, y=0)
+
+vs_bg_item    = vs_canvas.create_image(0, 0, anchor="nw")
+vs_pause_item = vs_canvas.create_image(5,   5, anchor="nw", image=vs_pause_img)
+vs_exit_item  = vs_canvas.create_image(745, 5, anchor="nw", image=exit_img)
+
+vs_bg_photo = [None]
+
+def show_vs():
+    reset_match()
+    a, b = p1_char[0], p2_char[0]
+    photo = None
+    for fname in (f"{a}.{b}.png", f"{b}.{a}.png"):
+        try:
+            photo = load_img(fname, (800, 600))
+            break
+        except FileNotFoundError:
+            continue
+    if photo is None:
+        print(f"VS picture not found for {a} / {b}")
+    vs_bg_photo[0] = photo
+    vs_canvas.itemconfig(vs_bg_item, image=photo if photo else "")
+    for item in (vs_pause_item, vs_exit_item):
+        vs_canvas.tag_raise(item)
+    show_frame(vs_frame)
+    schedule(3500, start_choose)          # auto-continue after 3.5 s
+
+def vs_hover(item, base_y):
+    def enter(e):
+        vs_canvas.coords(item, vs_canvas.coords(item)[0], base_y - 10)
+    def leave(e):
+        vs_canvas.coords(item, vs_canvas.coords(item)[0], base_y)
+    vs_canvas.tag_bind(item, "<Enter>", enter)
+    vs_canvas.tag_bind(item, "<Leave>", leave)
+
+vs_hover(vs_pause_item, 5)
+vs_hover(vs_exit_item,  5)
+vs_canvas.tag_bind(vs_pause_item, "<Button-1>", lambda e: show_pause(vs_frame))
+vs_canvas.tag_bind(vs_exit_item,  "<Button-1>", lambda e: root.destroy())
+
+# ═══════════════════════════════════════════════════════════
+# SHARED HELPERS FOR THE GAME SCREENS
+# ═══════════════════════════════════════════════════════════
+HAND_FILES = {"rock": "rock.gif", "paper": "paper.gif", "scissors": "scissors.gif"}
+HANDS = ["rock", "paper", "scissors"]
+
+def load_h(path, h):
+    """Load an image at a given height, keeping its proportions."""
+    base = Image.open(path).convert("RGBA")
+    return ImageTk.PhotoImage(
+        base.resize((round(base.width * h / base.height), h), Image.Resampling.NEAREST))
+
+def add_lift(w, base_y, dy=10):
+    w.bind("<Enter>", lambda e: w.place_configure(y=base_y - dy))
+    w.bind("<Leave>", lambda e: w.place_configure(y=base_y))
+
+hand_var    = {k: make_variants(f, 150) for k, f in HAND_FILES.items()}  # n / h / s
+hand_center = {k: load_h(f, 240) for k, f in HAND_FILES.items()}         # computer spin
+hand_reveal = {k: load_h(f, 180) for k, f in HAND_FILES.items()}         # reveal
+hand_small  = {k: load_h(f, 110) for k, f in HAND_FILES.items()}         # countdown
+
+# "shoot" frames: big -> small
+_shoot = Image.open("shoot.png").convert("RGBA")
+SHOOT_STEPS = 10
+shoot_frames = []
+for s in range(SHOOT_STEPS + 1):
+    w = round(640 - (640 - 220) * s / SHOOT_STEPS)
+    shoot_frames.append(ImageTk.PhotoImage(
+        _shoot.resize((w, round(w * _shoot.height / _shoot.width)),
+                      Image.Resampling.NEAREST)))
+
+score = [0, 0]
+
+def reset_match():
+    score[0] = score[1] = 0
+
+# ═══════════════════════════════════════════════════════════
+# CHOOSE FRAME  (Player 1 / Player 2 pick a hand)
+# ═══════════════════════════════════════════════════════════
+top_player_img = load_img("player.png", (240, 120))
+top_num = {1: load_img("one.gif", (70, 70)), 2: load_img("two.gif", (70, 70))}
+choose_next_img = load_img("next.gif", (150, 96))
+
+choose_frame = tk.Frame(root, width=800, height=600, bg=BG_COLOR)
+choose_frame.place(x=0, y=0, width=800, height=600)
+
+c_pause = tk.Label(choose_frame, image=pause_img, bg=BG_COLOR)
+c_pause.image = pause_img
+c_pause.place(x=5, y=5)
+c_pause.bind("<Button-1>", lambda e: show_pause(choose_frame))
+add_lift(c_pause, 5)
+
+c_exit = tk.Label(choose_frame, image=exit_img, bg=BG_COLOR)
+c_exit.image = exit_img
+c_exit.place(x=745, y=5)
+c_exit.bind("<Button-1>", lambda e: root.destroy())
+add_lift(c_exit, 5)
+
+c_title = tk.Label(choose_frame, image=top_player_img, bg=BG_COLOR)
+c_title.image = top_player_img
+c_title.place(x=235, y=30)
+
+c_num = tk.Label(choose_frame, image=top_num[1], bg=BG_COLOR)
+c_num.image = top_num[1]
+c_num.place(x=495, y=55)
+
+c_next = tk.Label(choose_frame, image=choose_next_img, bg=BG_COLOR, cursor="hand2")
+c_next.image = choose_next_img
+c_next.place(x=790, y=590, anchor="se")
+add_lift(c_next, 590)
+
+HAND_CX, HAND_CY = {"rock": 160, "paper": 400, "scissors": 640}, 310
+hand_lbls  = {}
+hand_hov   = {k: False for k in HANDS}
+hand_ang   = {k: i * 0.9 for i, k in enumerate(HANDS)}
+hand_sel   = [None]
+hands_active = [True]
+comp_active  = [False]
+choose_turn  = [0]                 # 0 = player 1, 1 = player 2
+p1_pick, p2_pick = [None], [None]
+
+comp_lbl = tk.Label(choose_frame, bg=BG_COLOR)   # the big spinning hand (vs computer)
+
+def refresh_hand(k):
+    key = "s" if hand_sel[0] == k else ("h" if hand_hov[k] else "n")
+    img = hand_var[k][key]
+    hand_lbls[k].config(image=img)
+    hand_lbls[k].image = img
+
+def select_hand(k):
+    if comp_active[0]:
+        return
+    old = hand_sel[0]
+    hand_sel[0] = k
+    if old is not None:
+        refresh_hand(old)
+    refresh_hand(k)
+
+def hand_enter(k):
+    hand_hov[k] = True
+    refresh_hand(k)
+
+def hand_leave(k):
+    hand_hov[k] = False
+    refresh_hand(k)
+
+for k in HANDS:
+    lbl = tk.Label(choose_frame, image=hand_var[k]["n"], bg=BG_COLOR, cursor="hand2")
+    lbl.image = hand_var[k]["n"]
+    lbl.place(x=HAND_CX[k], y=HAND_CY, anchor="center")
+    lbl.bind("<Enter>",    lambda e, k=k: hand_enter(k))
+    lbl.bind("<Leave>",    lambda e, k=k: hand_leave(k))
+    lbl.bind("<Button-1>", lambda e, k=k: select_hand(k))
+    hand_lbls[k] = lbl
+
+def animate_hands():
+    if hands_active[0]:
+        for k in HANDS:
+            if hand_sel[0] == k:
+                hand_lbls[k].place_configure(y=HAND_CY)
+            else:
+                hand_ang[k] += 0.15
+                hand_lbls[k].place_configure(y=HAND_CY + int(10 * math.sin(hand_ang[k])))
+    choose_frame.after(30, animate_hands)
+
+animate_hands()
+
+def set_top_num(n):
+    c_num.config(image=top_num[n])
+    c_num.image = top_num[n]
+
+def start_choose():
+    choose_turn[0] = 0
+    p1_pick[0] = p2_pick[0] = None
+    hand_sel[0] = None
+    comp_active[0] = False
+    comp_lbl.place_forget()
+    for k in HANDS:
+        hand_hov[k] = False
+        hand_lbls[k].place(x=HAND_CX[k], y=HAND_CY, anchor="center")
+        refresh_hand(k)
+    hands_active[0] = True
+    set_top_num(1)
+    show_frame(choose_frame)
+
+# ── vs computer: one big hand changing every 0.5 s for 3 s ──
+def start_computer():
+    hands_active[0] = False
+    for l in hand_lbls.values():
+        l.place_forget()
+    set_top_num(2)
+    comp_active[0] = True
+    comp_lbl.place(x=400, y=330, anchor="center")
+    comp_tick(0)
+
+def comp_tick(n):
+    if n >= 6:
+        finish_computer()
+        return
+    img = hand_center[HANDS[n % 3]]
+    comp_lbl.config(image=img)
+    comp_lbl.image = img
+    schedule(500, lambda: comp_tick(n + 1))
+
+def finish_computer():
+    comp_active[0] = False
+    p2_pick[0] = random_choice()
+    go_round()
+
+def choose_next():
+    if comp_active[0]:                 # Next skips the 3 s wait
+        finish_computer()
+        return
+    if hand_sel[0] is None:
+        return
+    if choose_turn[0] == 0:
+        p1_pick[0] = hand_sel[0]
+        if selected_mode == "2p":
+            choose_turn[0] = 1
+            hand_sel[0] = None
+            set_top_num(2)
+            for k in HANDS:
+                refresh_hand(k)
+        else:
+            start_computer()
+    else:
+        p2_pick[0] = hand_sel[0]
+        go_round()
+
+c_next.bind("<Button-1>", lambda e: choose_next())
+
+# ═══════════════════════════════════════════════════════════
+# ROUND FRAME  (countdown -> shoot -> reveal -> score)
+# ═══════════════════════════════════════════════════════════
+round_frame = tk.Frame(root, width=800, height=600, bg=BG_COLOR)
+round_frame.place(x=0, y=0, width=800, height=600)
+
+r_pause = tk.Label(round_frame, image=pause_img, bg=BG_COLOR)
+r_pause.image = pause_img
+r_pause.place(x=5, y=5)
+r_pause.bind("<Button-1>", lambda e: show_pause(round_frame))
+add_lift(r_pause, 5)
+
+r_exit = tk.Label(round_frame, image=exit_img, bg=BG_COLOR)
+r_exit.image = exit_img
+r_exit.place(x=745, y=5)
+r_exit.bind("<Button-1>", lambda e: root.destroy())
+add_lift(r_exit, 5)
+
+NAME_FONT  = ("Courier", 24, "bold")
+SCORE_FONT = ("Courier", 56, "bold")
+
+r_name1  = tk.Label(round_frame, bg=BG_COLOR, fg="#1a6ebd", font=NAME_FONT)
+r_name2  = tk.Label(round_frame, bg=BG_COLOR, fg="#1a6ebd", font=NAME_FONT)
+r_score1 = tk.Label(round_frame, bg=BG_COLOR, fg="#1a6ebd", font=SCORE_FONT)
+r_score2 = tk.Label(round_frame, bg=BG_COLOR, fg="#1a6ebd", font=SCORE_FONT)
+r_name1.place(x=200, y=100, anchor="center")
+r_name2.place(x=600, y=100, anchor="center")
+r_score1.place(x=200, y=470, anchor="center")
+r_score2.place(x=600, y=470, anchor="center")
+
+r_center = tk.Label(round_frame, bg=BG_COLOR)                       # rock/paper/scissors + shoot
+r_result = tk.Label(round_frame, bg=BG_COLOR, fg="#1a6ebd",
+                    font=("Courier", 28, "bold"))                    # "DRAW"
+r_result.place(x=400, y=300, anchor="center")
+r_hand1  = tk.Label(round_frame, bg=BG_COLOR)
+r_hand2  = tk.Label(round_frame, bg=BG_COLOR)
+
+r_next = tk.Label(round_frame, image=choose_next_img, bg=BG_COLOR, cursor="hand2")
+r_next.image = choose_next_img
+add_lift(r_next, 590)
+
+def show_center(img):
+    r_center.config(image=img)
+    r_center.image = img
+    r_center.place(x=400, y=300, anchor="center")
+
+def update_scores():
+    r_score1.config(text=str(score[0]))
+    r_score2.config(text=str(score[1]))
+
+def go_round():
+    r_hand1.place_forget()
+    r_hand2.place_forget()
+    r_center.place_forget()
+    r_next.place_forget()
+    r_result.config(text="")
+    r_name1.config(text=p1_name[0])
+    r_name2.config(text=p2_name[0])
+    update_scores()
+    show_frame(round_frame)
+
+    # rock / paper / scissors, 1 s each
+    for i, k in enumerate(HANDS):
+        schedule(i * 1000, lambda k=k: show_center(hand_small[k]))
+    # SHOOT: starts big, shrinks to small over 1 s
+    for s in range(SHOOT_STEPS + 1):
+        schedule(3000 + s * 100, lambda s=s: show_center(shoot_frames[s]))
+    schedule(4100, reveal)
+
+def reveal():
+    r_center.place_forget()
+    r_hand1.config(image=hand_reveal[p1_pick[0]])
+    r_hand1.image = hand_reveal[p1_pick[0]]
+    r_hand2.config(image=hand_reveal[p2_pick[0]])
+    r_hand2.image = hand_reveal[p2_pick[0]]
+    r_hand1.place(x=200, y=300, anchor="center")
+    r_hand2.place(x=600, y=300, anchor="center")
+    schedule(900, resolve)
+
+def resolve():
+    w = get_winner(p1_pick[0], p2_pick[0])
+    if w == 0:
+        r_result.config(text="DRAW")       # score unchanged
+    else:
+        score[w - 1] += 1
+        update_scores()
+    r_next.place(x=790, y=590, anchor="se")
+
+result_text = tk.Label(result_frame, text="", bg=BG_COLOR, fg="#1a6ebd",
+                       font=("Arial", 28, "bold"))
+result_text.place(x=400, y=350, anchor="center")
+
+def round_next():
+    target = rounds_val[0] // 2 + 1        # first to win the majority of rounds
+    if max(score) >= target:
+        winner = p1_name[0] if score[0] > score[1] else p2_name[0]
+        result_text.config(text=f"{winner} wins!\n{score[0]} - {score[1]}")
+        show_frame(result_frame)
+    else:
+        start_choose()
+
+r_next.bind("<Button-1>", lambda e: round_next())
 
 # ── Start ─────────────────────────────────────────────────
 show_frame(home_frame)

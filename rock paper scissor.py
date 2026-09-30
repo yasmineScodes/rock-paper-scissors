@@ -669,17 +669,6 @@ music_bar.bind("<Button-1>",       on_music_drag)
 sfx_cursor_btn.bind("<B1-Motion>", on_sfx_cursor_drag)
 music_cursor_btn.bind("<B1-Motion>", on_music_cursor_drag)
 
-# ═══════════════════════════════════════════════════════════
-# GAME SCREEN (placeholder)
-# ═══════════════════════════════════════════════════════════
-tk.Label(game_frame, text="Game Screen — coming soon",
-         bg=BG_COLOR, font=("Arial", 24)).place(x=200, y=250)
-
-# ═══════════════════════════════════════════════════════════
-# RESULT SCREEN (placeholder)
-# ═══════════════════════════════════════════════════════════
-tk.Label(result_frame, text="Result Screen — coming soon",
-         bg=BG_COLOR, font=("Arial", 24)).place(x=200, y=250)
 
 # ═══════════════════════════════════════════════════════════
 # GAME LOGIC
@@ -864,15 +853,27 @@ def update_player_num():
 update_player_num()
 
 # ── NEXT logic ──
+def flash_name():
+    name_entry.config(highlightbackground="red", highlightcolor="red")
+    name_entry.focus_set()
+
+def reset_name_border(*_):
+    name_entry.config(highlightbackground="#a0c8f0", highlightcolor="#1a6ebd")
+
+name_var.trace_add("write", reset_name_border)
+
 def char_next():
     if selected_idx[0] is None:
         return
     name = name_var.get().strip()
+    if not name:                       # name is required
+        flash_name()
+        return
     turn = current_player_turn[0]
 
     if turn == 0:
         p1_char[0] = chars_info[selected_idx[0]]["name"]
-        p1_name[0] = name or "Player 1"
+        p1_name[0] = name
         if selected_mode == "2p":
             taken.add(selected_idx[0])
             selected_idx[0] = None
@@ -888,7 +889,7 @@ def char_next():
             show_vs()
     else:
         p2_char[0] = chars_info[selected_idx[0]]["name"]
-        p2_name[0] = name or "Player 2"
+        p2_name[0] = name
         show_vs()
 
 char_next_btn.bind("<Button-1>", lambda e: char_next())
@@ -1028,11 +1029,47 @@ def add_lift(w, base_y, dy=10):
 hand_var    = {k: make_variants(f, 150) for k, f in HAND_FILES.items()}  # n / h / s
 hand_center = {k: load_h(f, 240) for k, f in HAND_FILES.items()}         # computer spin
 hand_reveal = {k: load_h(f, 180) for k, f in HAND_FILES.items()}         # reveal
-hand_small  = {k: load_h(f, 110) for k, f in HAND_FILES.items()}         # countdown
+hand_small  = {k: load_h(f, 150) for k, f in HAND_FILES.items()}         # countdown (sides)
 
-# "shoot" frames: big -> small
+# "shoot" frames: big -> small, fast
 _shoot = Image.open("shoot.png").convert("RGBA")
-SHOOT_STEPS = 10
+_px = _shoot.load()
+_W, _H = _shoot.size
+
+def _diff(a, b):
+    return sum(abs(a[i] - b[i]) for i in range(4))
+
+# repair 1-pixel-wide glitch columns (differs from both neighbours, which match each other)
+_shoot = Image.open("shoot.png").convert("RGBA")
+_bg    = Image.new("RGBA", _shoot.size, BG_RGB + (255,))
+_shoot = Image.alpha_composite(_bg, _shoot).convert("RGB")
+_px = _shoot.load()
+_W, _H = _shoot.size
+
+def _d(a, b):
+    return sum(abs(a[i] - b[i]) for i in range(3))
+
+# count, for each column, the pixels that differ from BOTH neighbours
+# while the two neighbours look alike -> that's a thin line
+_counts = {}
+for _x in range(1, _W - 1):
+    n = 0
+    for _y in range(_H):
+        l, c, r = _px[_x - 1, _y], _px[_x, _y], _px[_x + 1, _y]
+        if _d(l, r) < 20 and _d(c, l) > 25:
+            n += 1
+    _counts[_x] = n
+
+_top = sorted(_counts.items(), key=lambda kv: -kv[1])[:5]
+print("most suspicious columns (x, pixels):", _top)
+
+for _x, n in _counts.items():
+    if n >= 4:                                  # repair from the left neighbour
+        for _y in range(_H):
+            _px[_x, _y] = _px[_x - 1, _y]
+        print("repaired column", _x)
+SHOOT_STEPS   = 8        # 8 steps x 40 ms = 0.32 s
+SHOOT_STEP_MS = 40
 shoot_frames = []
 for s in range(SHOOT_STEPS + 1):
     w = round(640 - (640 - 220) * s / SHOOT_STEPS)
@@ -1174,6 +1211,7 @@ def comp_tick(n):
     schedule(500, lambda: comp_tick(n + 1))
 
 def finish_computer():
+    cancel_timers()
     comp_active[0] = False
     p2_pick[0] = random_choice()
     go_round()
@@ -1230,10 +1268,9 @@ r_name2.place(x=600, y=100, anchor="center")
 r_score1.place(x=200, y=470, anchor="center")
 r_score2.place(x=600, y=470, anchor="center")
 
-r_center = tk.Label(round_frame, bg=BG_COLOR)                       # rock/paper/scissors + shoot
+r_center = tk.Label(round_frame, bg=BG_COLOR)                       # shoot
 r_result = tk.Label(round_frame, bg=BG_COLOR, fg="#1a6ebd",
                     font=("Courier", 28, "bold"))                    # "DRAW"
-r_result.place(x=400, y=300, anchor="center")
 r_hand1  = tk.Label(round_frame, bg=BG_COLOR)
 r_hand2  = tk.Label(round_frame, bg=BG_COLOR)
 
@@ -1249,25 +1286,45 @@ def show_center(img):
 def update_scores():
     r_score1.config(text=str(score[0]))
     r_score2.config(text=str(score[1]))
+HAND_MS = 600            # time each hand shows (was 1000) - lower = faster
+TICK_MS_CD = 20
+PER_HAND = HAND_MS // TICK_MS_CD
 
-def go_round():
+def countdown_tick(tick):
+    idx   = tick // PER_HAND
+    phase = (tick % PER_HAND) / PER_HAND
+    if tick % PER_HAND == 0:
+        img = hand_small[HANDS[idx]]
+        r_hand1.config(image=img); r_hand1.image = img
+        r_hand2.config(image=img); r_hand2.image = img
+    y = 300 - int(30 * math.sin(math.pi * phase))
+    r_hand1.place(x=200, y=y, anchor="center")
+    r_hand2.place(x=600, y=y, anchor="center")
+
+def hide_side_hands():
     r_hand1.place_forget()
     r_hand2.place_forget()
+
+def go_round():
+    hide_side_hands()
     r_center.place_forget()
     r_next.place_forget()
     r_result.config(text="")
+    r_result.place_forget()
     r_name1.config(text=p1_name[0])
     r_name2.config(text=p2_name[0])
     update_scores()
     show_frame(round_frame)
 
-    # rock / paper / scissors, 1 s each
-    for i, k in enumerate(HANDS):
-        schedule(i * 1000, lambda k=k: show_center(hand_small[k]))
-    # SHOOT: starts big, shrinks to small over 1 s
+    total = 3 * HAND_MS
+    for tick in range(3 * PER_HAND):
+        schedule(tick * TICK_MS_CD, lambda t=tick: countdown_tick(t))
+
+    schedule(total, hide_side_hands)
     for s in range(SHOOT_STEPS + 1):
-        schedule(3000 + s * 100, lambda s=s: show_center(shoot_frames[s]))
-    schedule(4100, reveal)
+        schedule(total + s * SHOOT_STEP_MS, lambda s=s: show_center(shoot_frames[s]))
+
+    schedule(total + SHOOT_STEPS * SHOOT_STEP_MS + 300, reveal)
 
 def reveal():
     r_center.place_forget()
@@ -1283,6 +1340,7 @@ def resolve():
     w = get_winner(p1_pick[0], p2_pick[0])
     if w == 0:
         r_result.config(text="DRAW")       # score unchanged
+        r_result.place(x=400, y=300, anchor="center")
     else:
         score[w - 1] += 1
         update_scores()
@@ -1298,6 +1356,64 @@ def round_next():
         winner = p1_name[0] if score[0] > score[1] else p2_name[0]
         result_text.config(text=f"{winner} wins!\n{score[0]} - {score[1]}")
         show_frame(result_frame)
+    else:
+        start_choose()
+
+r_next.bind("<Button-1>", lambda e: round_next())
+
+# ═══════════════════════════════════════════════════════════
+# RESULT FRAME  (winner screen)
+# ═══════════════════════════════════════════════════════════
+char_files = {info["name"]: info["file"] for info in chars_info}
+res_imgs   = {name: load_h(f, 220) for name, f in char_files.items()}
+
+res_pause = tk.Label(result_frame, image=pause_img, bg=BG_COLOR)
+res_pause.image = pause_img
+res_pause.place(x=5, y=5)
+res_pause.bind("<Button-1>", lambda e: show_pause(result_frame))
+add_lift(res_pause, 5)
+
+res_exit = tk.Label(result_frame, image=exit_img, bg=BG_COLOR)
+res_exit.image = exit_img
+res_exit.place(x=745, y=5)
+res_exit.bind("<Button-1>", lambda e: root.destroy())
+add_lift(res_exit, 5)
+
+res_title = tk.Label(result_frame, bg=BG_COLOR, fg="#1a6ebd",
+                     font=("Courier", 36, "bold"))
+res_title.place(x=400, y=110, anchor="center")
+
+RES_CY = 300
+res_char = tk.Label(result_frame, bg=BG_COLOR)
+res_char.place(x=400, y=RES_CY, anchor="center")
+
+res_score = tk.Label(result_frame, bg=BG_COLOR, fg="#1a6ebd",
+                     font=("Courier", 56, "bold"))
+res_score.place(x=400, y=500, anchor="center")
+
+res_ang = [0.0]
+
+def animate_result():
+    res_ang[0] += 0.15
+    res_char.place_configure(y=RES_CY + int(12 * math.sin(res_ang[0])))
+    result_frame.after(30, animate_result)
+
+animate_result()
+
+def show_result():
+    w    = 0 if score[0] > score[1] else 1
+    name = p1_name[0] if w == 0 else p2_name[0]
+    char = p1_char[0]  if w == 0 else p2_char[0]
+    res_title.config(text=f"{name} wins!")
+    res_char.config(image=res_imgs[char])
+    res_char.image = res_imgs[char]
+    res_score.config(text=f"{score[0]} - {score[1]}")
+    show_frame(result_frame)
+
+def round_next():
+    target = rounds_val[0] // 2 + 1        # first to win the majority of rounds
+    if max(score) >= target:
+        show_result()
     else:
         start_choose()
 

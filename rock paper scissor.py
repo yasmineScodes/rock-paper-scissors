@@ -1419,6 +1419,160 @@ def round_next():
 
 r_next.bind("<Button-1>", lambda e: round_next())
 
+# ═══════════════════════════════════════════════════════════
+# SOUNDS
+# ═══════════════════════════════════════════════════════════
+import time
+import pygame
+
+try:
+    pygame.mixer.init()
+except Exception as ex:
+    print("Sound disabled:", ex)
+
+SFX_FILES = {
+    "select":         "select.mp3",
+    "next":           "next.mp3",
+    "pause":          "pause.mp3",
+    "vs":             "vs screen.mp3",
+    "nonamenoavatar": "nonamenoavatar.mp3",
+    "rpsshoot":       "rpsshoot.mp3",
+    "roundwin":       "someonewinsaround.mp3",
+    "winning":        "winning.mp3",
+}
+SFX = {}
+for _k, _f in SFX_FILES.items():
+    try:
+        SFX[_k] = pygame.mixer.Sound(_f)
+    except Exception as ex:
+        print("Could not load", _f, "->", ex)
+
+def play(name):
+    """Play a sound effect (restarts it if already playing). Volume = SFX slider."""
+    s = SFX.get(name)
+    if s:
+        s.stop()
+        s.set_volume(sfx_val[0] / 100)
+        s.play()
+
+# ── background music: music -> 2 s gap -> music2 -> 2 s gap -> ... ──
+MUSIC_FILES  = ["music.mp3", "music2.mp3"]
+music_i      = [0]
+music_paused = [False]
+music_gap    = [0.0]       # time when the next track may start (0 = right away)
+music_fade   = [1.0]       # 0 -> 1 for the gradual volume increase
+
+def music_tick():
+    if not music_paused[0]:
+        if music_fade[0] < 1.0:
+            music_fade[0] = min(1.0, music_fade[0] + 0.04)      # ~2.5 s fade-in
+        pygame.mixer.music.set_volume(music_val[0] / 100 * music_fade[0])
+        if not pygame.mixer.music.get_busy():
+            now = time.monotonic()
+            if music_gap[0] is None:
+                music_gap[0] = now + 2                           # 2 s of silence
+            elif now >= music_gap[0]:
+                music_gap[0] = None
+                try:
+                    pygame.mixer.music.load(MUSIC_FILES[music_i[0] % len(MUSIC_FILES)])
+                    pygame.mixer.music.play()
+                except Exception as ex:
+                    print("Music error:", ex)
+                    music_gap[0] = now + 2
+                music_i[0] += 1
+    root.after(100, music_tick)
+
+def resume_music():
+    music_fade[0] = 0.0
+    pygame.mixer.music.set_volume(0)
+    pygame.mixer.music.unpause()
+    music_paused[0] = False                                      # tick fades it in
+
+def duck_music(seconds):
+    pygame.mixer.music.pause()
+    music_paused[0] = True
+    root.after(int(seconds * 1000) + 100, resume_music)
+
+# ── wrap existing functions to add sounds ──
+_orig_show_vs = show_vs
+def show_vs():
+    play("vs")
+    _orig_show_vs()
+
+_orig_show_result = show_result
+def show_result():
+    _orig_show_result()
+    play("winning")
+    if "winning" in SFX:
+        duck_music(SFX["winning"].get_length())     # music pauses, then fades back in
+
+_orig_resolve = resolve
+def resolve():
+    if get_winner(p1_pick[0], p2_pick[0]) != 0:     # someone won the round (not a draw)
+        play("roundwin")
+    _orig_resolve()
+
+_orig_countdown_tick = countdown_tick
+def countdown_tick(tick):
+    if tick % PER_HAND == 0:                        # each time the hands change
+        play("rpsshoot")
+    _orig_countdown_tick(tick)
+
+_orig_show_center = show_center
+def show_center(img):
+    if img is shoot_frames[0]:                      # the SHOOT image appears
+        play("rpsshoot")
+    _orig_show_center(img)
+
+# ── next buttons that only count when the click is valid ──
+def setup_next():
+    if selected_mode:
+        play("next")
+        show_frame(rounds_frame)
+next_btn.bind("<Button-1>", lambda e: setup_next())
+
+def choose_next_snd():
+    if comp_active[0] or hand_sel[0] is not None:
+        play("next")
+    choose_next()
+c_next.bind("<Button-1>", lambda e: choose_next_snd())
+
+def char_next_snd():
+    if selected_idx[0] is None or not name_var.get().strip():
+        play("nonamenoavatar")                      # missing name or character
+    else:
+        play("next")
+    char_next()
+char_next_btn.bind("<Button-1>", lambda e: char_next_snd())
+
+# ── one global click handler for all the other buttons ──
+NEXT_ALWAYS = {next_btn2, r_next}
+PAUSE_BTNS  = {pause_btn, pause_btn2, pause_btn3, c_pause, r_pause, res_pause}
+OWN_SOUND   = {next_btn, c_next, char_next_btn}
+
+def click_sound(e):
+    w = e.widget
+    if w in OWN_SOUND:
+        return
+    if w in NEXT_ALWAYS:
+        play("next")
+    elif w in PAUSE_BTNS:
+        play("pause")
+    elif w is vs_canvas:                            # buttons drawn on the VS picture
+        items = vs_canvas.find_withtag("current")
+        if vs_pause_item in items:
+            play("pause")
+        elif vs_exit_item in items:
+            play("select")
+    elif w in char_labels and char_labels.index(w) in taken:
+        return                                      # character already taken
+    elif isinstance(w, tk.Widget) and w.bind("<Button-1>"):
+        play("select")                              # any other button
+
+root.bind_all("<Button-1>", click_sound, add="+")
+
+music_tick()                                        # start the background music
+
 # ── Start ─────────────────────────────────────────────────
 show_frame(home_frame)
 root.mainloop()
